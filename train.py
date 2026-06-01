@@ -8,9 +8,11 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 import matplotlib.pyplot as plt
-from tqdm import tqdm
+from model import see_eyes, to_tensor, RotEyes, RotCNN4, RotCNN6
+from valid import map_data, load_data, valid_full
+
 from typing import List, Dict, Tuple
-import cv2
+import cv
 
 PREDICTOR_PATH = "shape_predictor_68_face_landmarks.dat"
 DATA_DIR = "DF40-train"
@@ -19,20 +21,21 @@ EPOCHS = 50
 LEARNING_RATE = 1e-4
 TRAIN_SPLIT = 0.9
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-NUM_WORKERS = 4
+NUM_WORKERS = 12
 
 
 MODELS_CONFIG = [
-    {"name": "RotEyes", "class": RotEyes},
-    {"name": "RotCNN4", "class": RotCNN4},
-    {"name": "RotCNN6", "class", RotCNN6},
+    ("RotEyes", RotEyes),
+    ("RotCNN4", RotCNN4),
+    ("RotCNN6", RotCNN6)
 ]
 #
 def load_data_split(data_dir: str) -> Tuple[List[str], List[float]]:
 
 	paths, labels = [], []
-    	# Под разметку в две папки. Забрасываем туда соответствующие изображения от методов []
-	label_map = {"real": 0.0, "fake": 1.0}
+    	# Под разметку в две папки, соответственно настоящие фото и сгенерированные.
+	#Методы(июль-октябрь 2024): Midjourney, StyleGANXL, VQGAN, sd2.1
+	label_map = {"cdf": 0.0, "ff": 1.0}
 
 	for folder_name, label in label_map.items():
 		folder_path = os.path.join(data_dir, folder_name)
@@ -50,21 +53,29 @@ def load_data_split(data_dir: str) -> Tuple[List[str], List[float]]:
 	return (paths.tolist(), labels.tolist())
 #
 class EyesDataset(Dataset):
-    def __init__(self, paths: List[str], labels: List[float]):
-        self.paths = paths
-        self.labels = labels
+	def __init__(self, paths: List[str], labels: List[float]):
+		self.paths = paths
+		self.labels = labels
 
-    def __len__(self):
-        return len(self.paths)
+	def __len__(self):
+		return len(self.paths)
 
-    def __getitem__(self, n):
-	img_np = cv2.imread(self.image_paths[n])
-        if img_np is None:
-            raise FileNotFoundError(f"\n\nError in: {self.image_paths[idx]}\n")
+	def __getitem__(self, n):
+		img_np = cv2.imread(self.paths[n])
+		if img_np is None:
+			raise FileNotFoundError(f"\n\nError in: {self.image_paths[n]}\n")
+		img_np = cv2.ctvColor(img_np, cv2.COLOR_BGR2RGB)
 
-        label = torch.tensor(self.labels[idx], dtype=torch.float32)
+		area, eye_l, eye_r, iris_l, iris_r = see_eyes(img_np, PREDICTOR_PATH)
 
-        return img_np, label
+		area=area.to_tensor()
+		eye_l=eye_l.to_tensor()
+		eye_r=eye_r.to_tensor()
+		iris_l=iris_l.to_tensor()
+		iris_r=iris_r.to_tensor()
+
+		label = torch.tensor(self.labels[n], dtype=torch.float32)
+		return (area, eye_l, eye_r, iris_l, iris_r, label)
 #
 def train_model(model_class, train_loader: DataLoader, epochs: int, lr: float, model_name: str) -> Tuple[nn.Module, Dict, float]:
 	model = model_class().to(DEVICE)
@@ -74,8 +85,10 @@ def train_model(model_class, train_loader: DataLoader, epochs: int, lr: float, m
     	#history = {"train_acc": [], "val_acc": [], "train_loss": [], "val_loss": []}
 	history = {"loss": [],"acc_t": [], "acc_v": [], "time": []}
 	start_time = time.perf_counter()
+	print("\nModel {model_name}...\n\n")
 
 	for epoch in range(epochs):
+		print("\nEpoch {epoch}...")
 		model.train()
 		train_correct, train_total, train_loss_sum = 0, 0, 0.0
 		for inputs, labels in train_loader:
@@ -88,7 +101,7 @@ def train_model(model_class, train_loader: DataLoader, epochs: int, lr: float, m
 			optimizer.step()
 
 			preds = (torch.sigmoid(outputs) > 0.5).float().squeeze(1)
-			train_correct += (preds == labels).sum().item()
+			train_correct += (preds >= labels-0.25).sum().item()
 			train_total += labels.size(0)
 			#train_loss_sum += loss.item()
 		history["loss"].append(train_loss_sum())
@@ -96,17 +109,18 @@ def train_model(model_class, train_loader: DataLoader, epochs: int, lr: float, m
 		model.eval()
 		val_correct, val_total, val_loss_sum = 0, 0, 0.0
 		with torch.no_grad():
-			for inputs, labels in train_loader
+			for inputs, labels in train_loader:
 				inputs, labels = inputs.to(DEVICE), labels.to(DEVICE)
 				outputs = model(inputs)
 				loss = criterion(outputs.squeese(1,labels),labels)
 				preds = (torch.sigmoid(outputs) > 0.5).float.squeese(1)
-				val_correct += (preds == labels).sum().item()
+				val_correct += (preds >= labels-0.25).sum().item()
 				val_total += labels.size(0)
 				#val_loss_sum += loss.item()
+
 		history["acc_t"].append(train_correct / train_total)
-        	history["acc_v"].append(val_correct / val_total)
-	        #history["loss"].append(val_loss_sum / len(val_loader))
+		history["acc_v"].append(val_correct / val_total)
+#history["loss"].append(val_loss_sum / len(val_loader))
 		history["time"].append(time.perf_counter() - start_time)
 
 	training_time = time.perf_counter() - start_time
@@ -114,21 +128,39 @@ def train_model(model_class, train_loader: DataLoader, epochs: int, lr: float, m
 #
 def plot_accuracy_curves(all_histories: Dict[str, Dict], output_path: str = "results/accuracy_curves.png"):
 
-    plt.figure(figsize=(10, 6))
-    for name, hist in all_histories.items():
-        epochs = range(1, len(hist["val_acc"]) + 1)
-        plt.plot(epochs, hist["val_acc"], label=f"{name} (val)", marker='o', linewidth=2)
-        plt.plot(epochs, hist["train_acc"], label=f"{name} (train)", linestyle='--', alpha=0.7)
+	plt.figure(figsize=(20, 6))
+	for name, hist in all_histories.items():
+		epochs = range(1, len(hist["acc_v"]) + 1)
+		plt.plot(epochs, hist["acc_v"], label=f"{name} (val)", marker='o', linewidth=2)
+		plt.plot(epochs, hist["acc_t"], label=f"{name} (train)", linestyle='-', alpha=0.7)
 
-    plt.xlabel("Epoch", fontsize=12)
-    plt.ylabel("Accuracy", fontsize=12)
-    plt.title("Validation & Train Accuracy over Epochs", fontsize=14)
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    plt.savefig(output_path, dpi=300, bbox_inches='tight')
-    plt.close()
+	plt.xlabel("Epoch", fontsize=12)
+	plt.ylabel("Accuracy", fontsize=12)
+	plt.title("Accuracy per epoch", fontsize=14)
+	plt.legend()
+	plt.grid(True, alpha=0.3)
+	plt.show()
+	os.makedirs(os.path.dirname(output_path), exist_ok=True)
+	plt.savefig(output_path, dpi=300, bbox_inches='tight')
+	plt.close()
+#
+def plot_methods(all_histories: Dict[str, float, float], output_path: str = "results/curves.png"):
 
+	plt.figure(figsize=(10, 6))
+	methods = list(all_histories.keys())
+	accuracies = [value[1] for value in all_histories.values[]]
+	bars = plt.bar(methods, accuracies, color='red', edgecolor='black')
+
+	plt.xlabel("Method", fontsize=12)
+	plt.ylabel("Accuracy", fontsize=12)
+	plt.title("Accuracy", fontsize=14)
+
+	plt.grid(True, alpha=0.3)
+	plt.show()
+	os.makedirs(os.path.dirname(output_path), exist_ok=True)
+	plt.savefig(output_path, dpi=300, bbox_inches='tight')
+	plt.close()
+#
 def main():
 	train_paths, train_labels = load_data_split(DATA_DIR)
 	train_loader = DataLoader(EyesDataset(train_paths, train_labels), batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_WORKERS, pin_memory=True)
@@ -136,40 +168,27 @@ def main():
 	all_metrics   = {}
 
 
-    for config in MODELS_CONFIG:
-        model_name = config["name"]
-	model_class = config["class"]
-	print("\nStart: {model_name}\n")
-        model, history, train_time = train_model(model_class, train_loader, EPOCHS, LEARNING_RATE, model_name)
+	for model_name, model_class in MODELS_CONFIG.items():
+		print("\nStart: {model_name}\n")
+		model, history, train_time = train_model(model_class, train_loader, EPOCHS, LEARNING_RATE, model_name)
 
-        all_histories[model_name] = history
-        all_metrics[model_name] = {
-            "best_val_acc": max(history["acc_v"]),
-            "training_time": train_time
-        }
+		all_histories[model_name] = history
+		all_metrics[model_name] = {
+			"best_val_acc": max(history["acc_v"]),
+			"training_time": train_time
+			}
 
-        os.makedirs("models", exist_ok=True)
-        torch.save(model.state_dict(), f"models/{model_name}_final.pt")
-        print(f"Модель сохранена: models/{model_name}_final.pt")
-
-	#Добавить валидацию по всему датасету после определения нужного количества эпох
-    print("\nAccuracy")
-    plot_accuracy_curves(all_histories)
-   # plot_summary_table(all_metrics)
-   
-#    print("\n" + "="*50)
-#    print("PROFIT?")
-#    print("="*50)
-#    print(f"{'Model':<12} | {'Val Acc':<8} | {'Train Time':<10} )
-#    print("-"*50)
-#    for name, m in all_metrics.items():
-#Добавить среднее время отработки по изображениям 
-#       print(f"{name} | {['best_val_acc']} | {['training_time']}s")
-#    print("="*50)
+		os.makedirs("models", exist_ok=True)
+		torch.save(model.state_dict(), f"models/{model_name}.pt")
+		print(f"Модель сохранена: models/{model_name}.pt")
 
 
+		print("\nAccuracy")
+		plot_accuracy_curves(all_histories)
+		hist_full=valid_full(model_class, model_name)
+#####################################################################
 if __name__ == "__main__":
 
 	from model import see_eyes, RotEyes, RotCNN4, RotCNN6
 	from valid import map_data, load_data, valid_full
-    main()
+	main()

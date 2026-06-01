@@ -5,14 +5,12 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
-import matplotlib.pyplot as plt
-from tqdm import tqdm
 from typing import List, Dict, Tuple
-import cv2
-from model import RotEyes, RotCNN4, RotCNN
+import cv
+from model import RotEyes, RotCNN4, RotCNN6
 
 PREDICTOR_PATH = "shape_predictor_68_face_landmarks.dat"
-DATA_DIR = "DF40"
+DATA_DIR = "DF40-train"
 BATCH_SIZE = 32
 EPOCHS = 50
 LEARNING_RATE = 1e-4
@@ -32,33 +30,42 @@ class ValDataset(Dataset):
         img_np = cv2.imread(self.image_paths[n])
         if img_np is None:
             raise FileNotFoundError(f"\n\nError in: {self.image_paths[idx]}\n")
+	 img_np = cv2.ctvColor(img_np, cv2.COLOR_BGR2RGB)
 
-        label = torch.tensor(self.labels[idx], dtype=torch.float32)
+	area, eye_l, eye_r, iris_l, iris_r = see_eyes(img_np, PREDICTOR_PATH)
 
-        return img_np, label
+	area=area.to_tensor()
+	eye_l=eye_l.to_tensor()
+	eye_r=eye_r.to_tensor()
+	iris_l=iris_l.to_tensor()
+	iris_r=iris_r.to_tensor()
+
+	label = torch.tensor(self.labels[n], dtype=torch.float32)
+	return (area, eye_l, eye_r, iris_l, iris_r, label)
 #
 def map_data(data_dir: str) -> List[str]:
 	dirs = []
 	for root, dir, _ in os.walk(data_dir):
 		for f in dir:
-			dirs.append(os.path.join(data_dir,dir)
+			dirs.append(os.path.join(data_dir,dir))
 	if not dirs:
 		raise FileNotFoundError(f"\n\n???\n\n")
 	return dirs
 #
-def load_data(data_dir: list[str]) -> Tuple[List[str], List[float32]]:
+def load_data(data_dir: list[str]) -> Tuple[List[str], List[float]]:
 
 	path, labels = [], []
 
-	label_map = {"real": 0.0, "fake": 1.0}
+	label_map = {"cdf": 0.0, "ff": 1.0}
 	image_exts = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
 
 	for folder_name, label in label_map.items():
-        	folder_path = os.path.join(data_dir, folder_name)
-        	for _, _, files in os.walk(folder_path):
-			for f in files
-				paths.append(os.path.join(folder_path,f))
-				labels.append(label)
+		folder_path = os.path.join(data_dir, folder_name)
+		for root, dirs, files in os.walk(folder_path):
+			for f in files:
+				if f.lower().endswith(image_exts):
+					paths.append(os.path.join(root,dirs,f))
+					labels.append(label)
 	paths = np.array(paths)
 	labels = np.array(labels)
 	idx = np.random.permutation(len(paths))
@@ -70,8 +77,9 @@ def load_data(data_dir: list[str]) -> Tuple[List[str], List[float32]]:
 #
 def valid_full(model_class, model_name: str):
 	model = model_class().to(DEVICE)
-        criterion = nn.BCEWithLogitsLoss()
-       	hist = {"Method": [], "Accuracy": [], "Time_avg": []}
+	model.eval()
+	criterion = nn.BCEWithLogitsLoss()
+	hist = {"Method": [], "Accuracy": [], "Time_avg": []}
 	dirs=map_data(DATA_DIR)
 	start_time = time.perf_counter()
 
@@ -79,19 +87,19 @@ def valid_full(model_class, model_name: str):
 		hist["Method"].append(d)
 		input_t, label_t = load_data(d)
 		valid_in = DataLoader(ValDataset(input_t, label_t), batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_WORKERS, pin_memory=True)
-                correct, total = 0, 0
+		correct, total = 0,0
 		time_d = time.perf_counter()
-                with torch.no_grad():
-                        for inputs, labels in valid_in
-                                inputs, labels = inputs.to(DEVICE), labels.to(DEVICE)
-                                outputs = model(inputs)
-                                loss = criterion(outputs.squeese(1,labels),labels)
-                                preds = (torch.sigmoid(outputs) > 0.5).float.squeese(1)
-                                correct += (preds == labels).sum().item()
-                                total += labels.size(0)
-                hist["Accuracy"].append(correct / total)
+		with torch.no_grad():
+			for inputs, labels in valid_in:
+				inputs, labels = inputs.to(DEVICE), labels.to(DEVICE)
+				outputs = model(inputs)
+				loss = criterion(outputs.squeese(1,labels),labels)
+				preds = (torch.sigmoid(outputs) > 0.5).float.squeese(1)
+				correct += (preds == labels).sum().item()
+				total += labels.size(0)
+		hist["Accuracy"].append(correct / total)
                 #history["loss"].append(val_loss_sum / len(val_loader))
-                history["Time_agv"].append((time.perf_counter() - time_d)/total)
+		history["Time_agv"].append((time.perf_counter() - time_d)/total)
 
-        return hist
+	return hist
 
