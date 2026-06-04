@@ -15,91 +15,190 @@
 #Фото  -> CNN(1) -> Выделение области глаз -> CNN по области глаз(2)(6 слоёв) -> активация, субдескритизация, выпрямление, полносвязный ->                           
 #        -> Если на входе видео, то проходим в несколько итераций, отбрасывая кадры с EAR<0.25 и (3)-> выводим на градиентный спуск два полученых значения: вероятность для глаз(3), получаем результат
 
+
+
 import numpy as np
 import torch
 import torch.nn as nn
 import math
 import torchvision
 import dlib
-
+import cv2
 IMGWIDTH=256
 IMGHEIGHT=128
 
-def crop_with_padding(pts, img, pad=5):
-        x, y, w, h = cv2.boundingRect(pts)
-        x1, y1 = max(0, x - pad), max(0, y - pad)
-        x2, y2 = min(img.shape[1], x + w + pad), min(img.shape[0], y + h + pad)
-        return img[y1:y2, x1:x2], (x1, y1)
+def pts_to_mask(pts, landmarks):
+	land = []
+	for po in pts:
+		land.append(landmarks[po])
+	land=np.array(land, dtype=np.int32)
+	mask = cv2.convexHull(land)
+	return mask
 
-def pts_to_mask(pts, shape_img):
-        mask = np.zeros(shape_img[:2], dtype=np.uint8)
-        pts = np.array([pts], dtype=np.int32)
-        cv2.fillPoly(mask, pts, 255)
-        return mask
 
-def iris_mask(crop_bgr, eye_pts):
-        center = np.mean(eye_pts, axis=0).astype(int)
-        width = np.linalg.norm(eye_pts[0] - eye_pts[3])  
-        pupil_r = int(width * 0.15)
-        iris_r = int(width * 0.35)
-        crop_center = (center[0] - 0, center[1] - 0) 
-        h, w = crop_bgr.shape[:2]
-        mask = np.zeros((h, w), dtype=np.uint8)
-        cv2.circle(mask, (center[0], center[1]), iris_r, 255, -1)
-        return mask / 255.0
+def iris_out(img_crop, landmarks, pts):
+	iris_ma = [1,2,4,5]
+	iris_md = []
+	for iri in iris_ma:
+		iris_md.append(pts[iri])
+
+	iris_mask = pts_to_mask(iris_md, landmarks)
+	x, y, w, h = cv2.boundingRect(iris_mask)
+	if h<=5:
+		return None
+
+	pad_x = int(w * 0.2)
+	pad_y = int(h * 0.3)
+
+	img_h, img_w = img_crop.shape[:2]
+	x1, y1 = max(0, x - pad_x), max(0, y - pad_y)
+	x2, y2 = min(img_w, x + w + pad_x), min(img_h, y + h + pad_y)
+	area=img_crop[y1:y2, x1:x2]
+	if area.size==0:
+		top_y = min(pts[1], pts[2])
+		bottom_y = max(pts[4], pts[5])
+		gray = cv2.cvtColor(img_crop, cv2.COLOR_BGR2GRAY)
+		blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+		a, thresh = cv2.threshold(blurred, 50, 255, cv2.THRESH_BINARY_INV)
+		kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+		clean_mask = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+		contours, _ = cv2.findContours(clean_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+		best_contour = None
+		max_area = 0
+		for cnt in contours:
+			area = cv2.contourArea(cnt)
+			if 30 < area < 2500:  
+				perimeter = cv2.arcLength(cnt, True)	
+				if perimeter > 0:
+					circularity = 4 * np.pi * area / (perimeter * perimeter)
+					M = cv2.moments(cnt)
+					if M["m00"] != 0:
+						cy = int(M["m01"] / M["m00"])
+						if top_y < cy < bottom_y and circularity > 0.4:
+							if area > max_area:
+								max_area = area
+								best_contour = cnt
+		if best_contour is not None:
+			x, y, w, h = cv2.boundingRect(best_contour)
+		else:
+			x = ((pts[0] + pts[3]) / 2) - 30
+			y = top_y
+			w = 60
+			h = bottom_y - top_y
+		img_h, img_w = img_crop.shape[:2]
+		x1,y1 = int(max(0, x - pad_x)), int(max(0, y - pad_y))
+		x2,y2 = int(min(img_w, x + w + pad_x)), int(min(img_h, y + h + pad_y))
+		area = img_crop[y1:y2, x1:x2]
+		if area.size==0:
+			return None
+
+	ret = cv2.cvtColor(area, cv2.COLOR_BGR2RGB)
+	result = cv2.resize(ret, (128,128))
+	return result #.transpose(2,0,1)
+
+
+def crop_face(pts, img, pad=5):
+	x, y, w, h = cv2.boundingRect(pts)
+	x1, y1 = max(0, x - pad), max(0, y - pad)
+	x2, y2 = min(img.shape[1], x + w + pad), min(img.shape[0], y + h + pad)
+	re = img[y1:y2, x1:x2]
+	re = cv2.resize(re, (256,128))
+	return cv2.cvtColor(re, cv2.COLOR_BGR2RGB)
+
+def crop_eyes(pts_r, pts_l, pts_b, img, pad=5):
+	x_r, y_r, w_r, h_r = cv2.boundingRect(pts_r)
+	x_l, y_l, w_l, h_l = cv2.boundingRect(pts_l)
+	x_b, y_b, w_b, h_b = cv2.boundingRect(pts_b)
+
+	x1_r, y1_r = max(0, x_r - pad*2), max(0, y_r - pad*2)
+	x2_r, y2_r = min(img.shape[1], x_r + w_r + pad*2), min(img.shape[0], y_r + h_r + pad*2)
+	img_r = img[y1_r:y2_r, x1_r:x2_r]
+
+	x1_l, y1_l = max(0, x_l - pad*2), max(0, y_l - pad*2)
+	x2_l, y2_l = min(img.shape[1], x_l + w_l + pad*2), min(img.shape[0], y_l + h_l + pad*2)
+	img_l = img[y1_l:y2_l, x1_l:x2_l]
+
+	x1_b, y1_b = max(0, x_b - pad), max(0, y_b - pad)
+	x2_b, y2_b = min(img.shape[1], x_b + w_b + pad), min(img.shape[0], y_b + h_b + pad)
+	img_b = cv2.resize(img[y1_b:y2_b, x1_b:x2_b], (256,128))
+
+	return  img_l, img_r, img_b
 
 def to_tensor(arr):
-        if arr.ndim == 2:
-            return torch.from_numpy(arr).unsqueeze(0).float()
-        else:
-            return torch.from_numpy(arr.transpose(2, 0, 1)).float() / 255.0
+#	resized = arr
+#	if len(resized.shape) == 2:
+#		rgb_img = cv2.cvtColor(resized, cv2.COLOR_GRAY2RGB)
+#	elif len(resized.shape) == 3 and resized.shape[2] == 1:
+#		rgb_img = cv2.cvtColor(resized, cv2.COLOR_GRAY2RGB)
+#	elif len(resized.shape) == 3 and resized.shape[2] == 3:
+#		rgb_img = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+#	elif len(resized.shape) == 3 and resized.shape[2] == 4:
+#		rgb_img = cv2.cvtColor(resized, cv2.COLOR_BGRA2RGB)
+#	tensor = torch.from_numpy(rgb_img.transpose(2, 0, 1)).float()
+#	if tensor.max() > 1.0:
+#		tensor = tensor / 255.0
+#	return tensor
 
+	if arr.ndim == 2:
 
-#Выделение массива с тремя областями из входного изображения
+		re = torch.from_numpy(arr).float().unsqueeze(0)
+		return torch.permute(re, (2,0,1))
+	if arr.ndim == 3 :
+		return torch.from_numpy(arr).float()
+
+#Выделение массива с тремя(5) областями из входного изображения
 def see_eyes(image_bgr: np.ndarray,
     predictor_path: str
 ):
-        area_m=list(1,17,18,21)
-        eye_l_m = list(range(36, 42))
-        eye_r_m = list(range(42, 48))
+	area_m = [0,16,17,26]
+	eye_r_m = [36,37,38,39,40,41]
+	eye_l_m = [42,43,44,45,46,47]
+	eye_b_m = list(range(36, 47))
 
-        detector = dlib.get_frontal_face_detector()
-        predictor = dlib.shape_predictor(predictor_path)
-        gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
-        face = detector(gray, 1)
-        if len(face) == 0:
-                return [0,0,0,0,0]
+	detector = dlib.get_frontal_face_detector()
+	predictor = dlib.shape_predictor(predictor_path)
+	gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+	face = detector(gray, 1)
+	if len(face) == 0:
+		return [None, None, None]
 
-        shape = predictor(gray, face[0])
-        landmarks = np.array([[p.x, p.y] for p in shape.parts()])
+	shape = predictor(gray, face[0])
+	landmarks = np.array([[p.x, p.y] for p in shape.parts()])
 
-        area_mask = pts_to_mask(region_pts, image_bgr)
-        area = to_tensor(mask_eye_region)
+	area_m_l = pts_to_mask(area_m, landmarks)
+	area_mask = crop_face(area_m_l, image_bgr, pad=5)
+	area=to_tensor(area_mask)
 
-        right_e, _ = crop_with_padding(right_pts, image_bgr, pad=10)
-        eye_r = to_tensor(right_crop)
+	right_e_l = pts_to_mask(eye_r_m, landmarks)
+	left_e_l = pts_to_mask(eye_l_m, landmarks)
+	eyes_b_l = pts_to_mask(eye_b_m, landmarks)
 
-        left_e, _ = crop_with_padding(left_pts, image_bgr, pad=10)
-        eye_l = to_tensor(left_crop)
+	iris_l_m, iris_r_m, eyes_e = crop_eyes(right_e_l, left_e_l, eyes_b_l,  image_bgr, pad=10)
+	eyes = to_tensor(eyes_e)
 
-        iris_r_mask = iris_mask(right_crop, right_pts)
-        iris_r = torch.from_numpy(iris_r_mask).unsqueeze(0)
+	iris_l = iris_out(iris_l_m, landmarks, eye_l_m)
+	iris_r = iris_out(iris_r_m, landmarks, eye_r_m)
 
-        iris_l_mask = iris_mask(left_crop, left_pts)
-        iris_l = torch.from_numpy(iris_l_mask).unsqueeze(0)
-#Область глаз, левый и правый глаза, левая и правая радужки
-        return area, eye_l, eye_r, iris_l, iris_r
+	if (iris_l is not None) and (iris_r is not None):
+		iris_i = np.hstack((iris_l,iris_r))
+		iris = to_tensor(iris_i)
+	else:
+		iris_i = torch.empty((256,128), dtype=torch.float32)
+		iris = torch.empty_like(iris_i)
+#Область глаз, глаза, радужки
+	return area, eyes, iris
 
 
 ##############################################
 #Область глаза, три ветви, 4 слоя
 class RotEyes(nn.Module):
-	
+
 	def __init__(self, num_classes=1):
 		super().__init__()
 		self.RotArea=self._branch()
-		self.RotEye=self._branch()
-		self.RotIris=self._branch()
+		self.RotEye=self._branch_s()
+		self.RotIris=self._branch_s()
+
 		self.fusion = nn.Sequential(
 			nn.Linear(256 * 3, 128),
 			nn.ReLU(inplace=True),
@@ -120,18 +219,24 @@ class RotEyes(nn.Module):
 		nn.AdaptiveAvgPool2d((1, 1))
 	)
 
-	def forward(self, area, eye_l, eye_r, iris_l, iris_r):
+	def _branch_s(self):
+		return nn.Sequential(
+		nn.Conv2d(3, 32, kernel_size=3, stride=1, padding=1), nn.BatchNorm2d(32), nn.ReLU(inplace=True), nn.MaxPool2d(kernel_size=2, stride=2),
+		nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1), nn.BatchNorm2d(64), nn.ReLU(inplace=True), nn.MaxPool2d(kernel_size=2, stride=2),
+		nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1), nn.BatchNorm2d(256), nn.ReLU(inplace=True),
+		nn.AdaptiveAvgPool2d((1, 1))
+	)
 
-		#area, eye_l, eye_r, iris_l, iris_r = see_eyes(image_bgr, predictor_path)
-		f_area = self.RotArea(area).flatten(start_dim=1)
+	def forward(self, input):
 
-		f_eye_l  = self.RotEye(eye_l).flatten(start_dim=1)
-		f_eye_r  = self.RotEye(eye_r).flatten(start_dim=1)
-		f_iris_l  = self.RotIris(iris_l).flatten(start_dim=1)
-		f_iris_r  = self.RotIris(iris_r).flatten(start_dim=1)
+		if (input[0] == None) or (input[1] == None) or (input[2]==None):
+			return None
 
-		f_eye  = (f_eye_l  + f_eye_r)  * 0.5
-		f_iris = (f_iris_l + f_iris_r) * 0.5
+		#area, eye, iris = see_eyes(image_bgr, predictor_path)
+		f_area = self.RotArea(input[0]).flatten(start_dim=1)
+		f_eye = self.RotEye(input[1]).flatten(start_dim=1)
+		f_iris = self.RotIris(input[2]).flatten(start_dim=1)
+
 		final = torch.cat([f_area, f_eye, f_iris], dim=1)
 		return self.fusion(final)
 
@@ -165,10 +270,12 @@ class RotCNN6(nn.Module):
 			nn.Linear(64, 1)
         		)
 
-	def forward(self, area):
-		#x, _ = see_eyes(image_bgr, predictor_path)
-		x = self.features(area)
-		x = torch.flatten(x, 1)  
+	def forward(self, input):
+		if (input[0] == None):
+			return None
+
+		x = self.features(input[0])
+		x = torch.flatten(x, 1)
 		x = self.classifier(x)
 		return x
 ##############################################
@@ -197,9 +304,11 @@ class RotCNN4(nn.Module):
 			nn.Linear(64, 1)
         		)
 
-	def forward(self, area):
-		#x, _ = see_eyes(image_bgr, predictor_path)
-		x = self.features(area)
+	def forward(self, input):
+		if (input[0] == None):
+			return None
+
+		x = self.features(input[0])
 		x = torch.flatten(x, 1)
 		x = self.classifier(x)
 		return x

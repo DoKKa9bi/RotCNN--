@@ -12,7 +12,7 @@ from model import see_eyes, to_tensor, RotEyes, RotCNN4, RotCNN6
 from valid import map_data, load_data, valid_full
 
 from typing import List, Dict, Tuple
-import cv
+import cv2
 
 PREDICTOR_PATH = "shape_predictor_68_face_landmarks.dat"
 DATA_DIR = "DF40-train"
@@ -21,7 +21,8 @@ EPOCHS = 50
 LEARNING_RATE = 1e-4
 TRAIN_SPLIT = 0.9
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-NUM_WORKERS = 12
+NUM_WORKERS = 8
+
 
 
 MODELS_CONFIG = [
@@ -30,6 +31,15 @@ MODELS_CONFIG = [
     ("RotCNN6", RotCNN6)
 ]
 #
+def check_pic(path: str):
+	img_np = cv2.imread(path)
+	img_np = cv2.cvtColor( img_np, cv2.COLOR_BGR2RGB)
+	area, eyes, iris = see_eyes(img_np, PREDICTOR_PATH)
+	if iris is not None and area is not None:
+		return 1
+	else:
+		return 0
+
 def load_data_split(data_dir: str) -> Tuple[List[str], List[float]]:
 
 	paths, labels = [], []
@@ -41,7 +51,9 @@ def load_data_split(data_dir: str) -> Tuple[List[str], List[float]]:
 		folder_path = os.path.join(data_dir, folder_name)
 		for root, _, files in os.walk(folder_path):
 			for f in files:
-				paths.append(os.path.join(root, f))
+				a=(os.path.join(root, f))
+#				if check_pic(a) == 1:
+				paths.append(a)
 				labels.append(label)
 
 	paths = np.array(paths)
@@ -51,6 +63,8 @@ def load_data_split(data_dir: str) -> Tuple[List[str], List[float]]:
 		paths[[i,idx[i]]]=paths[[idx[i],i]]
 		labels[[i,idx[i]]]=labels[[idx[i],i]]
 	return (paths.tolist(), labels.tolist())
+
+
 #
 class EyesDataset(Dataset):
 	def __init__(self, paths: List[str], labels: List[float]):
@@ -64,18 +78,15 @@ class EyesDataset(Dataset):
 		img_np = cv2.imread(self.paths[n])
 		if img_np is None:
 			raise FileNotFoundError(f"\n\nError in: {self.image_paths[n]}\n")
-		img_np = cv2.ctvColor(img_np, cv2.COLOR_BGR2RGB)
+		img_np = cv2.cvtColor( img_np, cv2.COLOR_BGR2RGB)
 
-		area, eye_l, eye_r, iris_l, iris_r = see_eyes(img_np, PREDICTOR_PATH)
-
-		area=area.to_tensor()
-		eye_l=eye_l.to_tensor()
-		eye_r=eye_r.to_tensor()
-		iris_l=iris_l.to_tensor()
-		iris_r=iris_r.to_tensor()
+		area, eyes, iris = see_eyes(img_np, PREDICTOR_PATH)
+		print("\n\t",iris.ndim,"-",iris.shape)
+		result=torch.cat([area, eyes, iris], dim=2)
 
 		label = torch.tensor(self.labels[n], dtype=torch.float32)
-		return (area, eye_l, eye_r, iris_l, iris_r, label)
+
+		return result, label
 #
 def train_model(model_class, train_loader: DataLoader, epochs: int, lr: float, model_name: str) -> Tuple[nn.Module, Dict, float]:
 	model = model_class().to(DEVICE)
@@ -96,13 +107,14 @@ def train_model(model_class, train_loader: DataLoader, epochs: int, lr: float, m
 
 			optimizer.zero_grad()
 			outputs = model(inputs)
-			loss = criterion(outputs.squeeze(1), labels)
-			loss.backward()
-			optimizer.step()
+			if outputs is not None:
+				loss = criterion(outputs.squeeze(1), labels)
+				loss.backward()
+				optimizer.step()
 
-			preds = (torch.sigmoid(outputs) > 0.5).float().squeeze(1)
-			train_correct += (preds >= labels-0.25).sum().item()
-			train_total += labels.size(0)
+				preds = (torch.sigmoid(outputs) > 0.5).float().squeeze(1)
+				train_correct += (preds >= labels-0.25).sum().item()
+				train_total += labels.size(0)
 			#train_loss_sum += loss.item()
 		history["loss"].append(train_loss_sum())
 		#функционал для построения графиков точности. Эксклюзив для курсовой, в прод не ставить
@@ -144,11 +156,11 @@ def plot_accuracy_curves(all_histories: Dict[str, Dict], output_path: str = "res
 	plt.savefig(output_path, dpi=300, bbox_inches='tight')
 	plt.close()
 #
-def plot_methods(all_histories: Dict[str, float, float], output_path: str = "results/curves.png"):
+def plot_methods(all_histories: Dict[str, float], output_path: str = "results/curves.png"):
 
 	plt.figure(figsize=(10, 6))
 	methods = list(all_histories.keys())
-	accuracies = [value[1] for value in all_histories.values[]]
+	accuracies = [value[1] for value, _ in all_histories.values()]
 	bars = plt.bar(methods, accuracies, color='red', edgecolor='black')
 
 	plt.xlabel("Method", fontsize=12)
@@ -168,8 +180,9 @@ def main():
 	all_metrics   = {}
 
 
-	for model_name, model_class in MODELS_CONFIG.items():
-		print("\nStart: {model_name}\n")
+	for model_name, model_class in MODELS_CONFIG:
+		print("\nStart: ")
+		print(model_name)
 		model, history, train_time = train_model(model_class, train_loader, EPOCHS, LEARNING_RATE, model_name)
 
 		all_histories[model_name] = history
@@ -186,6 +199,7 @@ def main():
 		print("\nAccuracy")
 		plot_accuracy_curves(all_histories)
 		hist_full=valid_full(model_class, model_name)
+		
 #####################################################################
 if __name__ == "__main__":
 

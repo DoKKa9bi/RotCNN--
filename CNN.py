@@ -36,14 +36,9 @@ def main():
 		return -1
 	img_np = cv2.ctvColor(img_np, cv2.COLOR_BGR2RGB)
 
-	area, eye_l, eye_r, iris_l, iris_r = see_eyes(img_np, PREDICTOR_PATH)
+	area, eyes, iris = see_eyes(img_np, PREDICTOR_PATH)
 
-	area=area.to_tensor()
-	eye_l=eye_l.to_tensor()
-	eye_r=eye_r.to_tensor()
-	iris_l=iris_l.to_tensor()
-	iris_r=iris_r.to_tensor()
-
+	inputs = Tuple[area,eyes,iris]
 
 	model=RotEyes()
 	save = torch.load('models/RotEyes.pt', map_location=DEVICE)
@@ -53,7 +48,7 @@ def main():
 	model=RotEyes().to(DEVICE)
 
 
-	pred=model(area, eye_l, eye_r, iris_l, iris_r)
+	pred=model(Tuple)
 	preds = (torch.sigmoid(pred) > 0.5).float().squeeze(1)
 
 	print("\nМодель RotEyes: на {pred} процентов дипфейк")

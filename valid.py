@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from typing import List, Dict, Tuple
-import cv
+import cv2
 from model import RotEyes, RotCNN4, RotCNN6
 
 PREDICTOR_PATH = "shape_predictor_68_face_landmarks.dat"
@@ -18,30 +18,35 @@ TRAIN_SPLIT = 0.9
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 NUM_WORKERS = 4
 
+def check_pic(path: str):
+	img_np = cv2.imread(path)
+	img_np = cv2.cvtColor( img_np, cv2.COLOR_BGR2RGB)
+	area, eyes, iris = see_eyes(img_np, PREDICTOR_PATH)
+	if iris is not None and area is not None:
+		return 1
+	else:
+		return 0
+
 class ValDataset(Dataset):
-    def __init__(self, paths: List[str], labels: List[float]):
-        self.paths = paths
-        self.labels = labels
+	def __init__(self, paths: List[str], labels: List[float]):
+		self.paths = paths
+		self.labels = labels
 
-    def __len__(self):
-        return len(self.paths)
+	def __len__(self):
+		return len(self.paths)
 
-    def __getitem__(self, n):
-        img_np = cv2.imread(self.image_paths[n])
-        if img_np is None:
-            raise FileNotFoundError(f"\n\nError in: {self.image_paths[idx]}\n")
-	 img_np = cv2.ctvColor(img_np, cv2.COLOR_BGR2RGB)
+	def __getitem__(self, n):
+		img_np = cv2.imread(self.image_paths[n])
+		if img_np is None:
+			raise FileNotFoundError(f"\n\nError in: {self.image_paths[idx]}\n")
+		img_np = cv2.cvtColor(img_np, cv2.COLOR_BGR2RGB)
 
-	area, eye_l, eye_r, iris_l, iris_r = see_eyes(img_np, PREDICTOR_PATH)
+		result = []
+		area, eyes, iris = see_eyes(img_np, PREDICTOR_PATH)
+		result=torch.cat([area, eyes, iris], dim=2)
+		label = torch.tensor(self.labels[n], dtype=torch.float32)
 
-	area=area.to_tensor()
-	eye_l=eye_l.to_tensor()
-	eye_r=eye_r.to_tensor()
-	iris_l=iris_l.to_tensor()
-	iris_r=iris_r.to_tensor()
-
-	label = torch.tensor(self.labels[n], dtype=torch.float32)
-	return (area, eye_l, eye_r, iris_l, iris_r, label)
+		return result, label
 #
 def map_data(data_dir: str) -> List[str]:
 	dirs = []
@@ -64,7 +69,9 @@ def load_data(data_dir: list[str]) -> Tuple[List[str], List[float]]:
 		for root, dirs, files in os.walk(folder_path):
 			for f in files:
 				if f.lower().endswith(image_exts):
-					paths.append(os.path.join(root,dirs,f))
+#					a=os.path.join(root,dirs,f)
+#					if check_pic(a) == 1:
+					path.append(os.path.join(root,dirs,f))
 					labels.append(label)
 	paths = np.array(paths)
 	labels = np.array(labels)
@@ -79,7 +86,8 @@ def valid_full(model_class, model_name: str):
 	model = model_class().to(DEVICE)
 	model.eval()
 	criterion = nn.BCEWithLogitsLoss()
-	hist = {"Method": [], "Accuracy": [], "Time_avg": []}
+	#hist = {"Method": [], "Accuracy": [], "Time_avg": []}
+	hist = {"Method": [], "Accuracy": []}
 	dirs=map_data(DATA_DIR)
 	start_time = time.perf_counter()
 
@@ -93,13 +101,14 @@ def valid_full(model_class, model_name: str):
 			for inputs, labels in valid_in:
 				inputs, labels = inputs.to(DEVICE), labels.to(DEVICE)
 				outputs = model(inputs)
-				loss = criterion(outputs.squeese(1,labels),labels)
-				preds = (torch.sigmoid(outputs) > 0.5).float.squeese(1)
-				correct += (preds == labels).sum().item()
-				total += labels.size(0)
+				if outputs is not None:
+					loss = criterion(outputs.squeese(1,labels),labels)
+					preds = (torch.sigmoid(outputs) > 0.5).float.squeese(1)
+					correct += (preds == labels).sum().item()
+					total += labels.size(0)
 		hist["Accuracy"].append(correct / total)
                 #history["loss"].append(val_loss_sum / len(val_loader))
-		history["Time_agv"].append((time.perf_counter() - time_d)/total)
+		#hist["Time_agv"].append((time.perf_counter() - time_d)/total)
 
 	return hist
 
