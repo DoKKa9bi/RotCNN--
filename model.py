@@ -26,6 +26,8 @@ import dlib
 import cv2
 IMGWIDTH=256
 IMGHEIGHT=128
+EMPTY_T = torch.zeros((3,128,256), dtype=torch.float32)
+
 
 def pts_to_mask(pts, landmarks):
 	land = []
@@ -94,7 +96,9 @@ def iris_out(img_crop, landmarks, pts):
 
 	ret = cv2.cvtColor(area, cv2.COLOR_BGR2RGB)
 	result = cv2.resize(ret, (128,128))
-	return result #.transpose(2,0,1)
+	if result.ndim == 3:
+		result = result #.transpose(2,0,1)
+	return result
 
 
 def crop_face(pts, img, pad=5):
@@ -125,26 +129,12 @@ def crop_eyes(pts_r, pts_l, pts_b, img, pad=5):
 	return  img_l, img_r, img_b
 
 def to_tensor(arr):
-#	resized = arr
-#	if len(resized.shape) == 2:
-#		rgb_img = cv2.cvtColor(resized, cv2.COLOR_GRAY2RGB)
-#	elif len(resized.shape) == 3 and resized.shape[2] == 1:
-#		rgb_img = cv2.cvtColor(resized, cv2.COLOR_GRAY2RGB)
-#	elif len(resized.shape) == 3 and resized.shape[2] == 3:
-#		rgb_img = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
-#	elif len(resized.shape) == 3 and resized.shape[2] == 4:
-#		rgb_img = cv2.cvtColor(resized, cv2.COLOR_BGRA2RGB)
-#	tensor = torch.from_numpy(rgb_img.transpose(2, 0, 1)).float()
-#	if tensor.max() > 1.0:
-#		tensor = tensor / 255.0
-#	return tensor
-
 	if arr.ndim == 2:
-
 		re = torch.from_numpy(arr).float().unsqueeze(0)
-		return torch.permute(re, (2,0,1))
+		return re
 	if arr.ndim == 3 :
-		return torch.from_numpy(arr).float()
+		a = torch.from_numpy(arr).float()
+		return torch.permute(a, (2,0,1))
 
 #Выделение массива с тремя(5) областями из входного изображения
 def see_eyes(image_bgr: np.ndarray,
@@ -161,7 +151,6 @@ def see_eyes(image_bgr: np.ndarray,
 	face = detector(gray, 1)
 	if len(face) == 0:
 		return [None, None, None]
-
 	shape = predictor(gray, face[0])
 	landmarks = np.array([[p.x, p.y] for p in shape.parts()])
 
@@ -181,10 +170,9 @@ def see_eyes(image_bgr: np.ndarray,
 
 	if (iris_l is not None) and (iris_r is not None):
 		iris_i = np.hstack((iris_l,iris_r))
-		iris = to_tensor(iris_i)
+		iris = to_tensor(iris_i) #.permute(2,0,1)
 	else:
-		iris_i = torch.empty((256,128), dtype=torch.float32)
-		iris = torch.empty_like(iris_i)
+		iris = None
 #Область глаз, глаза, радужки
 	return area, eyes, iris
 
@@ -200,7 +188,7 @@ class RotEyes(nn.Module):
 		self.RotIris=self._branch_s()
 
 		self.fusion = nn.Sequential(
-			nn.Linear(256 * 3, 128),
+			nn.Linear(512, 128),
 			nn.ReLU(inplace=True),
 			nn.Dropout(0.3),
 			nn.Linear(128, 1)
@@ -223,19 +211,17 @@ class RotEyes(nn.Module):
 		return nn.Sequential(
 		nn.Conv2d(3, 32, kernel_size=3, stride=1, padding=1), nn.BatchNorm2d(32), nn.ReLU(inplace=True), nn.MaxPool2d(kernel_size=2, stride=2),
 		nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1), nn.BatchNorm2d(64), nn.ReLU(inplace=True), nn.MaxPool2d(kernel_size=2, stride=2),
-		nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1), nn.BatchNorm2d(256), nn.ReLU(inplace=True),
+		nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1), nn.BatchNorm2d(128), nn.ReLU(inplace=True),
 		nn.AdaptiveAvgPool2d((1, 1))
 	)
 
 	def forward(self, input):
-
-		if (input[0] == None) or (input[1] == None) or (input[2]==None):
-			return None
+		area, eyes, iris = torch.split(input, 256, dim = 3)
 
 		#area, eye, iris = see_eyes(image_bgr, predictor_path)
-		f_area = self.RotArea(input[0]).flatten(start_dim=1)
-		f_eye = self.RotEye(input[1]).flatten(start_dim=1)
-		f_iris = self.RotIris(input[2]).flatten(start_dim=1)
+		f_area = self.RotArea(area).flatten(start_dim=1)
+		f_eye = self.RotEye(eyes).flatten(start_dim=1)
+		f_iris = self.RotIris(iris).flatten(start_dim=1)
 
 		final = torch.cat([f_area, f_eye, f_iris], dim=1)
 		return self.fusion(final)
@@ -271,10 +257,9 @@ class RotCNN6(nn.Module):
         		)
 
 	def forward(self, input):
-		if (input[0] == None):
-			return None
+		areas, _ = torch.split(input, 256, dim=3)
 
-		x = self.features(input[0])
+		x = self.features(areas)
 		x = torch.flatten(x, 1)
 		x = self.classifier(x)
 		return x
@@ -305,10 +290,9 @@ class RotCNN4(nn.Module):
         		)
 
 	def forward(self, input):
-		if (input[0] == None):
-			return None
+		areas, _ = torch.split(input, 256, dim=3)
 
-		x = self.features(input[0])
+		x = self.features(areas)
 		x = torch.flatten(x, 1)
 		x = self.classifier(x)
 		return x

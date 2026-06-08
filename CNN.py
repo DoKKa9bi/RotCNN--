@@ -38,7 +38,7 @@ def main():
 
 	area, eyes, iris = see_eyes(img_np, PREDICTOR_PATH)
 
-	inputs = Tuple[area,eyes,iris]
+	inputs = torch.cat([area, eyes, iris], dim=2)
 
 	model=RotEyes()
 	save = torch.load('models/RotEyes.pt', map_location=DEVICE)
@@ -46,9 +46,8 @@ def main():
 	model.load_state_dict(state_dict)
 	model.eval()
 	model=RotEyes().to(DEVICE)
-
-
-	pred=model(Tuple)
+	inputs = inputs.to(DEVICE)
+	pred = model(inputs)
 	preds = (torch.sigmoid(pred) > 0.5).float().squeeze(1)
 
 	print("\nМодель RotEyes: на {pred} процентов дипфейк")

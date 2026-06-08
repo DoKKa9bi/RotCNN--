@@ -7,16 +7,23 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from typing import List, Dict, Tuple
 import cv2
-from model import RotEyes, RotCNN4, RotCNN6
+from model import see_eyes, RotEyes, RotCNN4, RotCNN6
 
-PREDICTOR_PATH = "shape_predictor_68_face_landmarks.dat"
-DATA_DIR = "DF40-train"
+PREDICTOR_PATH = "/content/models/shape_predictor_68_face_landmarks.dat"
 BATCH_SIZE = 32
-EPOCHS = 50
+EPOCHS = 25
 LEARNING_RATE = 1e-4
 TRAIN_SPLIT = 0.9
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 NUM_WORKERS = 4
+
+def check_iris(iris_in):
+	if iris_in.ndim == 2:
+		iris = iris_in.unsqueeze(0) #.permute(2,0,1)
+		return iris
+	else:
+		return iris_in
+
 
 def check_pic(path: str):
 	img_np = cv2.imread(path)
@@ -28,40 +35,33 @@ def check_pic(path: str):
 		return 0
 
 class ValDataset(Dataset):
-	def __init__(self, paths: List[str], labels: List[float]):
-		self.paths = paths
-		self.labels = labels
+	def __init__(self, path: str):
+		data = torch.load(path)
+		self.tensors = data['tensors']
+		self.labels = data['labels']
 
 	def __len__(self):
-		return len(self.paths)
+		return len(self.tensors)
 
 	def __getitem__(self, n):
-		img_np = cv2.imread(self.image_paths[n])
-		if img_np is None:
-			raise FileNotFoundError(f"\n\nError in: {self.image_paths[idx]}\n")
-		img_np = cv2.cvtColor(img_np, cv2.COLOR_BGR2RGB)
+		return self.tensors[n], self.labels[n]
 
-		result = []
-		area, eyes, iris = see_eyes(img_np, PREDICTOR_PATH)
-		result=torch.cat([area, eyes, iris], dim=2)
-		label = torch.tensor(self.labels[n], dtype=torch.float32)
-
-		return result, label
 #
 def map_data(data_dir: str) -> List[str]:
 	dirs = []
-	for root, dir, _ in os.walk(data_dir):
-		for f in dir:
-			dirs.append(os.path.join(data_dir,dir))
+	for name in os.listdir(data_dir):
+		full_path = os.path.join(data_dir, name)
+		if os.path.isdir(full_path):
+			dirs.append(full_path)
 	if not dirs:
 		raise FileNotFoundError(f"\n\n???\n\n")
 	return dirs
 #
-def load_data(data_dir: list[str]) -> Tuple[List[str], List[float]]:
+def load_data(data_dir: str):
 
-	path, labels = [], []
+	paths, labels, tensors, labels_l = [], [], [], []
 
-	label_map = {"cdf": 0.0, "ff": 1.0}
+	label_map = {"cdf": 0.0, "real": 0.0, "ff": 1.0, "fake": 1.0}
 	image_exts = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
 
 	for folder_name, label in label_map.items():
@@ -69,9 +69,7 @@ def load_data(data_dir: list[str]) -> Tuple[List[str], List[float]]:
 		for root, dirs, files in os.walk(folder_path):
 			for f in files:
 				if f.lower().endswith(image_exts):
-#					a=os.path.join(root,dirs,f)
-#					if check_pic(a) == 1:
-					path.append(os.path.join(root,dirs,f))
+					path.append(os.path.join(root,f))
 					labels.append(label)
 	paths = np.array(paths)
 	labels = np.array(labels)
@@ -80,21 +78,41 @@ def load_data(data_dir: list[str]) -> Tuple[List[str], List[float]]:
 	for i in range(len(paths)):
 		paths[[i,idx[i]]]=paths[[idx[i],i]]
 		labels[[i,idx[i]]]=labels[[idx[i],i]]
-	return (paths.tolist(), labels.tolist())
+
+	for n in range(len(paths)):
+		img_np = cv2.imread(paths[n])
+		if img_np is not None:
+			img_np = cv2.cvtColor( img_np, cv2.COLOR_BGR2RGB)
+			area, eyes, iris = see_eyes(img_np, PREDICTOR_PATH)
+			if area is not None and eyes is not None:
+				result = torch.cat([area, eyes, check_iris(iris)], dim=2)
+				tensors.append(result)
+				labels_l.append(labels[n])
+
+	torch.save({
+		'tensors': tensors,
+		'labels': labels_l
+		}, os.path.join(data_dir, 'data.pt'))
+
+	return (os.path.join(data_dir, 'data.pt'))
 #
-def valid_full(model_class, model_name: str):
+def valid_full(model_class, model_name: str, DDATA_DIR: str):
+
 	model = model_class().to(DEVICE)
 	model.eval()
 	criterion = nn.BCEWithLogitsLoss()
 	#hist = {"Method": [], "Accuracy": [], "Time_avg": []}
 	hist = {"Method": [], "Accuracy": []}
-	dirs=map_data(DATA_DIR)
+	dirs=map_data(DDATA_DIR)
 	start_time = time.perf_counter()
 
+	path_m = []
 	for d in dirs:
+		path_m.append(load_data(d))
+
+	for d in path_m:
 		hist["Method"].append(d)
-		input_t, label_t = load_data(d)
-		valid_in = DataLoader(ValDataset(input_t, label_t), batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_WORKERS, pin_memory=True)
+		valid_in = DataLoader(ValDataset(d), batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_WORKERS, pin_memory=True)
 		correct, total = 0,0
 		time_d = time.perf_counter()
 		with torch.no_grad():
@@ -102,9 +120,9 @@ def valid_full(model_class, model_name: str):
 				inputs, labels = inputs.to(DEVICE), labels.to(DEVICE)
 				outputs = model(inputs)
 				if outputs is not None:
-					loss = criterion(outputs.squeese(1,labels),labels)
-					preds = (torch.sigmoid(outputs) > 0.5).float.squeese(1)
-					correct += (preds == labels).sum().item()
+					loss = criterion(outputs.squeeze(1),labels)
+					preds = (torch.sigmoid(outputs) > 0.5).float().squeeze(1)
+					correct += (preds == labels.float()).sum().item()
 					total += labels.size(0)
 		hist["Accuracy"].append(correct / total)
                 #history["loss"].append(val_loss_sum / len(val_loader))
