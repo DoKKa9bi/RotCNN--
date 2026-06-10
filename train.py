@@ -18,7 +18,7 @@ from valid import map_data, load_data, valid_full
 from google.colab import drive, files
 
 
-PREDICTOR_PATH = "/content/shape_predictor_68_face_landmarks.dat"
+PREDICTOR_PATH = "/RotCNN--/RotCNN--/shape_predictor_68_face_landmarks.dat"
 BATCH_SIZE = 32
 EPOCHS = 25
 LEARNING_RATE = 1e-4
@@ -65,41 +65,42 @@ def check_pic(path: str):
 	else:
 		return 1
 ##################
-def load_data_split(data_dir: str) -> Tuple[List[str], List[float]]:
+def load_data_split(data_dir_i: str) -> Tuple[List[str], List[float]]:
 
-	paths, labels, tensors, labels_l = [], [], [], []
-	label_map = {"cdf": 0.0, "real": 0.0, "fake": 1.0, "ff": 1.0}
+  paths, labels, tensors, labels_l = [], [], [], []
+  label_map = {"cdf": 0.0, "real": 0.0, "fake": 1.0, "ff": 1.0}
 
-	for folder_name, label in label_map.items():
-		folder_path = os.path.join(data_dir, folder_name)
-		for root, _, files in os.walk(folder_path):
-			for f in files:
-				paths.append(os.path.join(root,f))
-				labels.append(label)
+  for data_dir in os.listdir(data_dir_i):
+    for folder_name, label in label_map.items():
+      folder_path = os.path.join(data_dir, folder_name)
+      for root, _, files in os.walk(folder_path):
+        for f in files:
+          paths.append(os.path.join(root,f))
+          labels.append(label)
+  
+  paths = np.array(paths)
+  labels = np.array(labels)
+  idx = np.random.permutation(len(paths))
+  for i in range(len(paths)):
+    paths[[i,idx[i]]]=paths[[idx[i],i]]
+    labels[[i,idx[i]]]=labels[[idx[i],i]]
 
-	paths = np.array(paths)
-	labels = np.array(labels)
-	idx = np.random.permutation(len(paths))
-	for i in range(len(paths)):
-		paths[[i,idx[i]]]=paths[[idx[i],i]]
-		labels[[i,idx[i]]]=labels[[idx[i],i]]
+  for n in range(len(paths)):
+    img_np = cv2.imread(paths[n])
+    if img_np is not None:
+      img_np = cv2.cvtColor( img_np, cv2.COLOR_BGR2RGB)
+      area, eyes, iris = see_eyes(img_np, PREDICTOR_PATH)
+      if area is not None and eyes is not None:
+        result = torch.cat([area, eyes, check_iris(iris)], dim=2)
+        tensors.append(result)
+        labels_l.append(labels[n])
 
-	for n in range(len(paths)):
-		img_np = cv2.imread(paths[n])
-		if img_np is not None:
-			img_np = cv2.cvtColor( img_np, cv2.COLOR_BGR2RGB)
-			area, eyes, iris = see_eyes(img_np, PREDICTOR_PATH)
-			if area is not None and eyes is not None:
-				result = torch.cat([area, eyes, check_iris(iris)], dim=2)
-				tensors.append(result)
-				labels_l.append(labels[n])
+  torch.save({
+    'tensors': tensors,
+    'labels': labels_l
+  }, os.path.join(data_dir, 'data.pt'))
 
-	torch.save({
-		'tensors': tensors,
-		'labels': labels_l
-		}, os.path.join(data_dir, 'data.pt'))
-
-	return (os.path.join(data_dir, 'data.pt'))
+  return (os.path.join(data_dir, 'data.pt'))
 ####################
 def check_iris(iris_in):
 	if iris_in.ndim == 2:
