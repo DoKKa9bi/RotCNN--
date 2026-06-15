@@ -1,5 +1,6 @@
 #Тренировка по выбору трёх моделей: RotEye, RotCNN4, RotCNN6
 #Проверить графики
+import gc
 import os
 import time
 import numpy as np
@@ -13,12 +14,10 @@ from valid import map_data, load_data, valid_full
 import sys
 from typing import List, Dict, Tuple
 import cv2
-from model import see_eyes, RotEyes, RotCNN4, RotCNN6
-from valid import map_data, load_data, valid_full
 from google.colab import drive, files
 
 
-PREDICTOR_PATH = "/RotCNN--/RotCNN--/shape_predictor_68_face_landmarks.dat"
+PREDICTOR_PATH = "shape_predictor_68_face_landmarks.dat"
 BATCH_SIZE = 32
 EPOCHS = 25
 LEARNING_RATE = 1e-4
@@ -234,8 +233,12 @@ def main_f(model_config, DATA_DIR, VAL_DIR):
 
 	print("\nAccuracy")
 	plot_accuracy_curves(all_histories, f"/content/models/{model_name}-curve.png")
-	hist_full=valid_full(model_class, model_name, VAL_DIR)
-	plot_methods(hist_full,f"/content/models/{model_name}_methods.png")
-	files.download(f"/content/models/{model_name}-curve.png")
-	files.download(f"/content/models/{model_name}-methods.png")
+	del train_loader
+	gc.collect()
+	
+	for model_name, model_class in model_config:
+		hist_full=valid_full(model_class, model_name, VAL_DIR)
+		plot_methods(hist_full,f"/content/models/{model_name}_methods.png")
+		files.download(f"/content/models/{model_name}-curve.png")
+		files.download(f"/content/models/{model_name}-methods.png")
 #####################################################################
