@@ -129,6 +129,26 @@ def crop_eyes(pts_r, pts_l, pts_b, img, pad=5):
 
 	return  img_l, img_r, img_b
 
+def draw_end(area, eye_r, eye_l, img):
+	x_f, y_f, w_f, h_f = cv2.boundingRect(area)
+	x_r, y_r, w_r, h_r = cv2.boundingRect(eye_r)
+	x_l, y_l, w_l, h_l = cv2.boundingRect(eye_l)
+	img_b = img.copy()
+	cv2.rectangle(img_b, (x_f, y_f), (x_f + w_f, y_f + h_f), (0, 255, 0), -1)
+	cv2.addWeighted(img_b, 0.4, img, 0.6, 0, img)
+	cv2.rectangle(img, (x_f, y_f), (x_f + w_f, y_f + h_f), (0, 255, 0), 2)
+
+	cv2.rectangle(img_b, (x_r, y_r), (x_r + w_r, y_r + h_r), (0, 255, 255), -1)
+	cv2.addWeighted(img_b, 0.4, img, 0.6, 0, img)
+	cv2.rectangle(img, (x_r, y_r), (x_r + w_r, y_r + h_r), (0, 255, 255), 2)
+
+	cv2.rectangle(img_b, (x_l, y_l), (x_l + w_l, y_l + h_l), (0, 255, 255), -1)
+	cv2.addWeighted(img_b, 0.4, img, 0.6, 0, img)
+	cv2.rectangle(img, (x_l, y_l), (x_l + w_l, y_l + h_l), (0, 255, 255), 2)
+
+	cv2.imshow("Area", img)
+
+
 def to_tensor(arr):
 	if arr.ndim == 2:
 		re = torch.from_numpy(arr).float().unsqueeze(0)
@@ -175,6 +195,7 @@ def see_eyes(image_bgr: np.ndarray,
 	else:
 		iris = None
 #Область глаз, глаза, радужки
+	draw_end(area_m_l, right_e_l, left_e_l, image_bgr)
 	return area, eyes, iris
 
 
