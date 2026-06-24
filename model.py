@@ -165,7 +165,8 @@ def see_eyes(image_bgr: np.ndarray,
 	eye_r_m = [36,37,38,39,40,41]
 	eye_l_m = [42,43,44,45,46,47]
 	eye_b_m = list(range(36, 47))
-
+	lips = [49, 51, 53, 58]
+	
 	detector = dlib.get_frontal_face_detector()
 	predictor = dlib.shape_predictor(predictor_path)
 	gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
@@ -179,23 +180,21 @@ def see_eyes(image_bgr: np.ndarray,
 	area_mask = crop_face(area_m_l, image_bgr, pad=5)
 	area=to_tensor(area_mask)
 
-	right_e_l = pts_to_mask(eye_r_m, landmarks)
-	left_e_l = pts_to_mask(eye_l_m, landmarks)
-	eyes_b_l = pts_to_mask(eye_b_m, landmarks)
-
-	iris_l_m, iris_r_m, eyes_e = crop_eyes(right_e_l, left_e_l, eyes_b_l,  image_bgr, pad=10)
-	eyes = to_tensor(eyes_e)
-
-	iris_l = iris_out(iris_l_m, landmarks, eye_l_m)
-	iris_r = iris_out(iris_r_m, landmarks, eye_r_m)
-
-	if (iris_l is not None) and (iris_r is not None):
-		iris_i = np.hstack((iris_l,iris_r))
-		iris = to_tensor(iris_i) #.permute(2,0,1)
-	else:
-		iris = None
+	#right_e_l = pts_to_mask(eye_r_m, landmarks)
+	#left_e_l = pts_to_mask(eye_l_m, landmarks)
+	#eyes_b_l = pts_to_mask(eye_b_m, landmarks)
+	#iris_l_m, iris_r_m, eyes_e = crop_eyes(right_e_l, left_e_l, eyes_b_l,  image_bgr, pad=10)
+	#eyes = to_tensor(eyes_e)
+	#iris_l = iris_out(iris_l_m, landmarks, eye_l_m)
+	#iris_r = iris_out(iris_r_m, landmarks, eye_r_m)
+	#if (iris_l is not None) and (iris_r is not None):
+#		iris_i = np.hstack((iris_l,iris_r))
+#		iris = to_tensor(iris_i) #.permute(2,0,1)
+#	else:
+#		iris = None
 #Область глаз, глаза, радужки
 	draw_end(area_m_l, right_e_l, left_e_l, image_bgr)
+
 	return area, eyes, iris
 
 
