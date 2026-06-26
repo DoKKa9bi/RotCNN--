@@ -110,18 +110,8 @@ def crop_face(pts, img, pad=5):
 	re = cv2.resize(re, (256,128))
 	return cv2.cvtColor(re, cv2.COLOR_BGR2RGB)
 
-def crop_eyes(pts_r, pts_l, pts_b, img, pad=5):
-	x_r, y_r, w_r, h_r = cv2.boundingRect(pts_r)
-	x_l, y_l, w_l, h_l = cv2.boundingRect(pts_l)
+def crop_eyes(pts_b, img, pad=5):
 	x_b, y_b, w_b, h_b = cv2.boundingRect(pts_b)
-
-	x1_r, y1_r = max(0, x_r - pad*2), max(0, y_r - pad*2)
-	x2_r, y2_r = min(img.shape[1], x_r + w_r + pad*2), min(img.shape[0], y_r + h_r + pad*2)
-	img_r = img[y1_r:y2_r, x1_r:x2_r]
-
-	x1_l, y1_l = max(0, x_l - pad*2), max(0, y_l - pad*2)
-	x2_l, y2_l = min(img.shape[1], x_l + w_l + pad*2), min(img.shape[0], y_l + h_l + pad*2)
-	img_l = img[y1_l:y2_l, x1_l:x2_l]
 
 	x1_b, y1_b = max(0, x_b - pad), max(0, y_b - pad)
 	x2_b, y2_b = min(img.shape[1], x_b + w_b + pad), min(img.shape[0], y_b + h_b + pad)
@@ -129,23 +119,13 @@ def crop_eyes(pts_r, pts_l, pts_b, img, pad=5):
 
 	return  img_l, img_r, img_b
 
-def draw_end(area, eye_r, eye_l, img):
-	x_f, y_f, w_f, h_f = cv2.boundingRect(area)
-	x_r, y_r, w_r, h_r = cv2.boundingRect(eye_r)
-	x_l, y_l, w_l, h_l = cv2.boundingRect(eye_l)
+def draw_end(area: [], img):
 	img_b = img.copy()
-	cv2.rectangle(img_b, (x_f, y_f), (x_f + w_f, y_f + h_f), (0, 255, 0), -1)
-	cv2.addWeighted(img_b, 0.4, img, 0.6, 0, img)
-	cv2.rectangle(img, (x_f, y_f), (x_f + w_f, y_f + h_f), (0, 255, 0), 2)
-
-	cv2.rectangle(img_b, (x_r, y_r), (x_r + w_r, y_r + h_r), (0, 255, 255), -1)
-	cv2.addWeighted(img_b, 0.4, img, 0.6, 0, img)
-	cv2.rectangle(img, (x_r, y_r), (x_r + w_r, y_r + h_r), (0, 255, 255), 2)
-
-	cv2.rectangle(img_b, (x_l, y_l), (x_l + w_l, y_l + h_l), (0, 255, 255), -1)
-	cv2.addWeighted(img_b, 0.4, img, 0.6, 0, img)
-	cv2.rectangle(img, (x_l, y_l), (x_l + w_l, y_l + h_l), (0, 255, 255), 2)
-
+	for item in area:
+		x, y, w, h = cv2.boundingRect(item)
+		cv2.rectangle(img_b, (x, y), (x + w, y + h), (0, 255, 0), -1)
+		cv2.addWeighted(img_b, 0.4, img, 0.6, 0, img)
+		cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
 	cv2.imshow("Area", img)
 
 
@@ -180,22 +160,20 @@ def see_eyes(image_bgr: np.ndarray,
 	area_mask = crop_face(area_m_l, image_bgr, pad=5)
 	area=to_tensor(area_mask)
 
+	lips_m_l = pts_to_mask(lips, landmarks)
+	lips_mask=crop_face(lips_m_l, image_bgr, pad=5)
+	lips=to_tensor(area_mask)
+	
 	#right_e_l = pts_to_mask(eye_r_m, landmarks)
 	#left_e_l = pts_to_mask(eye_l_m, landmarks)
-	#eyes_b_l = pts_to_mask(eye_b_m, landmarks)
-	#iris_l_m, iris_r_m, eyes_e = crop_eyes(right_e_l, left_e_l, eyes_b_l,  image_bgr, pad=10)
-	#eyes = to_tensor(eyes_e)
-	#iris_l = iris_out(iris_l_m, landmarks, eye_l_m)
-	#iris_r = iris_out(iris_r_m, landmarks, eye_r_m)
-	#if (iris_l is not None) and (iris_r is not None):
-#		iris_i = np.hstack((iris_l,iris_r))
-#		iris = to_tensor(iris_i) #.permute(2,0,1)
-#	else:
-#		iris = None
-#Область глаз, глаза, радужки
-	draw_end(area_m_l, right_e_l, left_e_l, image_bgr)
+	
+	eyes_b_l = pts_to_mask(eye_b_m, landmarks)
+	eyes_e = crop_eyes(eyes_b_l,  image_bgr, pad=10)
+	eyes = to_tensor(eyes_e)
+#Область глаз, глаза, рот
+	draw_end(area_m_l, lips, image_bgr)
 
-	return area, eyes, iris
+	return area, eyes, lips
 
 
 ##############################################
@@ -205,8 +183,8 @@ class RotEyes(nn.Module):
 	def __init__(self, num_classes=1):
 		super().__init__()
 		self.RotArea=self._branch()
-		self.RotEye=self._branch_s()
-		self.RotIris=self._branch_s()
+		self.RotEye=self._branch()
+		self.RotIris=self._branch()
 
 		self.fusion = nn.Sequential(
 			nn.Linear(512, 128),
@@ -241,12 +219,12 @@ class RotEyes(nn.Module):
 	)
 
 	def forward(self, input):
-		area, eyes, iris = torch.split(input, 256, dim = 3)
+		area, eyes, lips = torch.split(input, 256, dim = 3)
 
 		#area, eye, iris = see_eyes(image_bgr, predictor_path)
 		f_area = self.RotArea(area).flatten(start_dim=1)
 		f_eye = self.RotEye(eyes).flatten(start_dim=1)
-		f_iris = self.RotIris(iris).flatten(start_dim=1)
+		f_lips = self.RotIris(lips).flatten(start_dim=1)
 
 		final = torch.cat([f_area, f_eye, f_iris], dim=1)
 
