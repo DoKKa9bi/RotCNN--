@@ -191,7 +191,7 @@ class RotEyes(nn.Module):
 		self.RotIris=self._branch()
 
 		self.fusion = nn.Sequential(
-			nn.Linear(512, 128),
+			nn.Linear(768, 128),
 			nn.ReLU(inplace=True),
 			nn.Dropout(0.3),
 			nn.Linear(128, 1)
@@ -230,6 +230,6 @@ class RotEyes(nn.Module):
 		f_eye = self.RotEye(eyes).flatten(start_dim=1)
 		f_lips = self.RotIris(lips).flatten(start_dim=1)
 
-		final = torch.cat([f_area, f_eye, f_iris], dim=1)
+		final = torch.cat([f_area, f_eye, f_lips], dim=1)
 
 		return self.fusion(final)
