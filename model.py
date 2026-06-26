@@ -191,6 +191,7 @@ class RotEyes(nn.Module):
 		self.RotIris=self._branch()
 
 		self.fusion = nn.Sequential(
+			nn.Dropout(0.5),
 			nn.Linear(768, 128),
 			nn.ReLU(inplace=True),
 			nn.Dropout(0.3),
