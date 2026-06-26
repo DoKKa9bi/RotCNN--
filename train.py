@@ -83,11 +83,12 @@ def load_data_split(data_dir: str) -> Tuple[List[str], List[float]]:
 		img_np = cv2.imread(paths[n])
 		if img_np is not None:
 			img_np = cv2.cvtColor( img_np, cv2.COLOR_BGR2RGB)
-			area, eyes, iris = see_eyes(img_np, PREDICTOR_PATH)
-			if area is not None and eyes is not None:
-				result = torch.cat([area, eyes, check_iris(iris)], dim=2)
-				tensors.append(result)
-				labels_l.append(labels[n])
+			faces = see_eyes(img_np, PREDICTOR_PATH)
+			for face in faces:
+				if face[0] is not None and face[1] is not None:
+					result = torch.cat([face[0], face[1], face[2]], dim=2)
+					tensors.append(result)
+					labels_l.append(labels[n])
 
 	torch.save({
 		'tensors': tensors,
