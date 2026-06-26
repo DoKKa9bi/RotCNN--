@@ -146,6 +146,8 @@ def see_eyes(image_bgr: np.ndarray,
 	eye_l_m = [42,43,44,45,46,47]
 	eye_b_m = list(range(36, 47))
 	lips = [49, 51, 53, 58]
+
+	faces=[]
 	
 	detector = dlib.get_frontal_face_detector()
 	predictor = dlib.shape_predictor(predictor_path)
@@ -153,27 +155,29 @@ def see_eyes(image_bgr: np.ndarray,
 	face = detector(gray, 1)
 	if len(face) == 0:
 		return [None, None, None]
-	shape = predictor(gray, face[0])
-	landmarks = np.array([[p.x, p.y] for p in shape.parts()])
+	for face_o in face:
+		shape = predictor(gray, face_o)
+		landmarks = np.array([[p.x, p.y] for p in shape.parts()])
 
-	area_m_l = pts_to_mask(area_m, landmarks)
-	area_mask = crop_face(area_m_l, image_bgr, pad=5)
-	area=to_tensor(area_mask)
+		area_m_l = pts_to_mask(area_m, landmarks)
+		area_mask = crop_face(area_m_l, image_bgr, pad=5)
+		area=to_tensor(area_mask)
 
-	lips_m_l = pts_to_mask(lips, landmarks)
-	lips_mask=crop_face(lips_m_l, image_bgr, pad=5)
-	lips=to_tensor(area_mask)
+		lips_m_l = pts_to_mask(lips, landmarks)
+		lips_mask=crop_face(lips_m_l, image_bgr, pad=5)
+		lips=to_tensor(area_mask)
 	
 	#right_e_l = pts_to_mask(eye_r_m, landmarks)
 	#left_e_l = pts_to_mask(eye_l_m, landmarks)
 	
-	eyes_b_l = pts_to_mask(eye_b_m, landmarks)
-	eyes_e = crop_eyes(eyes_b_l,  image_bgr, pad=10)
-	eyes = to_tensor(eyes_e)
+		eyes_b_l = pts_to_mask(eye_b_m, landmarks)
+		eyes_e = crop_eyes(eyes_b_l,  image_bgr, pad=10)
+		eyes = to_tensor(eyes_e)
 #Область глаз, глаза, рот
-	draw_end(area_m_l, lips, image_bgr)
-
-	return area, eyes, lips
+		draw_end(area_m_l, lips, image_bgr)
+		faces.append([area,eyes,lips)
+		
+	return faces
 
 
 ##############################################
